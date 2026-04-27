@@ -1,0 +1,48 @@
+# ── Secrets ───────────────────────────────────────────────────────────────────
+.env
+*.key
+*.pem
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Virtual environment ───────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Database (dev SQLite files) ───────────────────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
+
+# ── ChromaDB vector store ─────────────────────────────────────────────────────
+chroma_data/
+
+# ── Alembic generated versions (keep the folder, not the generated files) ─────
+# Uncomment if you want to exclude auto-generated migrations:
+# db/versions/*.py
+
+# ── PyInstaller build output ──────────────────────────────────────────────────
+build/
+dist/
+*.spec.bak
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── OS junk ───────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Editor ────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
