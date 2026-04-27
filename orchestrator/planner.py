@@ -43,7 +43,7 @@ from core.ids import prefixed_id
 from db.engine import session_factory
 from db.mappers import project_to_row, task_to_row
 from db.tables import ProjectRow, TaskEdgeRow, TaskRow
-from llm.client import get_client
+from llm.client import get_client_for
 from llm.schemas import Message
 from models.project import Project, ProjectStatus
 from models.task import (
@@ -512,7 +512,7 @@ async def decompose_project(project: Project) -> list[Task]:
     """
     log.info("planner.start", project_id=project.project_id, title=project.title)
 
-    client = get_client()
+    client = get_client_for("planner", "planning")
     settings = get_settings()
     last_error = "Unknown error"
 
@@ -573,7 +573,20 @@ async def decompose_project(project: Project) -> list[Task]:
             continue
 
         # ── All good — write to DB ─────────────────────────────────────────
-        await _write_graph_to_db(project, tasks, edges)
+        try:
+            await _write_graph_to_db(project, tasks, edges)
+        except Exception as exc:
+            # DB failures are not LLM failures — retrying the LLM won't help.
+            # Break immediately so the retry loop exits cleanly and the
+            # "all retries exhausted" block below can set the project to REVIEW.
+            last_error = f"DB write failed: {exc}"
+            log.error(
+                "planner.db_write_error",
+                project_id=project.project_id,
+                attempt=attempt,
+                error=last_error,
+            )
+            break
 
         log.info(
             "planner.success",
@@ -617,7 +630,26 @@ async def plan_and_run(project: Project) -> None:
             project_id=project.project_id,
             error=str(exc),
         )
-        return  # project status already set to REVIEW inside decompose_project
+        # Safety net: decompose_project sets REVIEW before raising, but if that
+        # write itself failed the project could still be stuck at INTAKE forever.
+        # Re-apply REVIEW here so the project is always recoverable.
+        try:
+            async with session_factory() as db:
+                proj_row = await db.get(ProjectRow, project.project_id)
+                if proj_row and proj_row.status not in (
+                    ProjectStatus.REVIEW.value,
+                    "closure",
+                    "archived",
+                ):
+                    proj_row.status = ProjectStatus.REVIEW.value
+                    proj_row.updated_at = datetime.now(timezone.utc)
+        except Exception as db_exc:
+            log.error(
+                "planner.failsafe_status_update_failed",
+                project_id=project.project_id,
+                error=str(db_exc),
+            )
+        return
 
     # Auto-start the engine — no human /run call needed
     try:

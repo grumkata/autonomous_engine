@@ -1160,7 +1160,7 @@ function startSSE(id){
       if(data.project_id!==S.pid)return;
       const tasks=data.tasks||[];
       const prevC=(S.graph?.tasks||[]).length;
-      if(tasks.length!==prevC){refreshProj();return}
+      if(tasks.length!==prevC){refreshProj().catch(()=>setPlanningState(false,data.project_status));return}
       tasks.forEach(t=>{S.tmap[t.task_id]={...S.tmap[t.task_id],...t};updateDagNode(t)});
       if(S.graph)S.graph.tasks=tasks;
       const c=data.status_counts||{};

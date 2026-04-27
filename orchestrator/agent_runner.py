@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 
 import structlog
 
-from llm.client import get_client
+from llm.client import get_client_for
 from llm.prompts import PromptBuilder
 from llm.schemas import AgentInputBundle, AgentOutput, MemoryExcerpt
 from models.project import Project
@@ -139,7 +139,7 @@ async def run_agent_for_task(
     )
 
     messages = _builder.build_messages(bundle)
-    client   = get_client()
+    client   = get_client_for(task.owner_department.value, task.type.value)
 
     audit(
         AuditEventType.AGENT_STARTED,
