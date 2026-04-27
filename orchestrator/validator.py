@@ -132,7 +132,18 @@ _TYPE_THRESHOLDS: dict[str, float] = {
 
 
 def _threshold_for(task: Task) -> float:
-    return max(task.quality_threshold, _TYPE_THRESHOLDS.get(task.type.value, 0.75))
+    """
+    Compute the effective validation threshold for a task.
+
+    Applies settings.validation_score_scale so operators can dial thresholds
+    up or down without editing code.  The scale defaults to 1.0 (no change).
+    Use 0.65–0.75 when running small local models (Ollama 7B–13B) to prevent
+    all tasks from failing.  Set back to 1.0 for cloud models (Claude, GPT-4).
+    """
+    from config import get_settings
+    scale = max(0.3, min(1.0, get_settings().validation_score_scale))
+    base = max(task.quality_threshold, _TYPE_THRESHOLDS.get(task.type.value, 0.75))
+    return round(base * scale, 4)
 
 
 # ---------------------------------------------------------------------------
@@ -564,6 +575,33 @@ class TaskValidator:
             issues=len(all_issues),
             latency_ms=latency_ms,
         )
+
+        # ── Diagnostic breakdown on failure (makes debugging much easier) ────
+        if result != ValidationResult.PASS:
+            dim_scores = {
+                "structural":    round(s_score, 2),
+                "completeness":  round(c_score, 2),
+                "coherence":     round(co_score, 2),
+                "accuracy":      round(accuracy, 2),
+                "risk_profile":  round(r_score, 2),
+                "readiness":     round(rd_score, 2),
+                "usefulness":    round(u_score, 2),
+            }
+            failing = {k: v for k, v in dim_scores.items() if v < threshold}
+            log.warning(
+                "validator.fail_breakdown",
+                task_id=task.task_id,
+                task_type=task.type.value,
+                composite=composite,
+                threshold=threshold,
+                failing_dimensions=failing,
+                top_issue=all_issues[0] if all_issues else "none",
+                hint=(
+                    "If ALL tasks fail like this, lower VALIDATION_SCORE_SCALE in .env "
+                    f"(current: {threshold / max(task.quality_threshold, 0.01):.2f}) "
+                    "or switch to a stronger LLM provider (LLM_PROVIDER=anthropic)."
+                ) if composite < 0.55 else "",
+            )
 
         return ValidationReport(
             task_id=task.task_id,

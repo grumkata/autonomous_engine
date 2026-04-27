@@ -357,3 +357,127 @@ def make_openrouter_provider(
             "X-Title": app_name,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Additional free provider factories
+# ---------------------------------------------------------------------------
+
+
+def make_cerebras_provider(
+    api_key: str,
+    default_model: str = "llama-3.3-70b",
+) -> OpenAICompatProvider:
+    """
+    Cerebras Cloud — free inference, 1000+ tokens/sec on large models.
+
+    Free models (as of 2025):
+        llama-3.3-70b         — best quality free option
+        llama-3.1-8b          — fastest, good for simple tasks
+        llama-3.1-70b         — alternative large model
+
+    Sign up at https://cloud.cerebras.ai — no credit card required.
+    Set CEREBRAS_API_KEY in .env
+    """
+    return OpenAICompatProvider(
+        base_url="https://api.cerebras.ai/v1",
+        api_key=api_key,
+        default_model=default_model,
+        provider_label="cerebras",
+        timeout_seconds=60,
+    )
+
+
+def make_sambanova_provider(
+    api_key: str,
+    default_model: str = "Meta-Llama-3.3-70B-Instruct",
+) -> OpenAICompatProvider:
+    """
+    SambaNova Cloud — free fast inference on large models.
+
+    Free models include:
+        Meta-Llama-3.3-70B-Instruct   — high quality
+        Meta-Llama-3.1-405B-Instruct  — largest free model available anywhere
+        Qwen2.5-72B-Instruct          — strong reasoning
+
+    Sign up at https://cloud.sambanova.ai — free, no credit card.
+    Set SAMBANOVA_API_KEY in .env
+    """
+    return OpenAICompatProvider(
+        base_url="https://api.sambanova.ai/v1",
+        api_key=api_key,
+        default_model=default_model,
+        provider_label="sambanova",
+        timeout_seconds=90,
+    )
+
+
+def make_gemini_provider(
+    api_key: str,
+    default_model: str = "gemini-1.5-flash",
+) -> OpenAICompatProvider:
+    """
+    Google Gemini via OpenAI-compatible endpoint.
+
+    Free tier limits (generous for development):
+        gemini-1.5-flash:   15 RPM, 1,000,000 TPD — use for Tier 2
+        gemini-1.5-flash-8b: 15 RPM, 1,000,000 TPD — use for Tier 1
+        gemini-1.5-pro:     2 RPM, 50 req/day — Tier 3 (free but very limited)
+
+    Get a free API key at https://aistudio.google.com — no billing required.
+    Set GEMINI_API_KEY in .env
+    """
+    return OpenAICompatProvider(
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        api_key=api_key,
+        default_model=default_model,
+        provider_label="gemini",
+        timeout_seconds=90,
+    )
+
+
+def make_deepseek_provider(
+    api_key: str,
+    default_model: str = "deepseek-chat",
+) -> OpenAICompatProvider:
+    """
+    DeepSeek — extremely cheap (not free but close: ~$0.07-0.28 per 1M tokens).
+
+    Models:
+        deepseek-chat     — DeepSeek-V3, strong coding + reasoning
+        deepseek-reasoner — DeepSeek-R1, best for complex planning tasks
+
+    Sign up at https://platform.deepseek.com
+    Set DEEPSEEK_API_KEY in .env
+    """
+    return OpenAICompatProvider(
+        base_url="https://api.deepseek.com/v1",
+        api_key=api_key,
+        default_model=default_model,
+        provider_label="deepseek",
+        timeout_seconds=120,
+    )
+
+
+def make_mistral_provider(
+    api_key: str,
+    default_model: str = "mistral-small-latest",
+) -> OpenAICompatProvider:
+    """
+    Mistral la Plateforme — has a free experimental tier.
+
+    Models:
+        mistral-small-latest    — fast, good quality
+        open-mistral-nemo       — free, limited
+        open-codestral-mamba    — good for code tasks
+
+    Sign up at https://console.mistral.ai
+    Set MISTRAL_API_KEY in .env
+    """
+    return OpenAICompatProvider(
+        base_url="https://api.mistral.ai/v1",
+        api_key=api_key,
+        default_model=default_model,
+        provider_label="mistral",
+        timeout_seconds=90,
+    )

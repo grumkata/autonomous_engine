@@ -43,7 +43,7 @@ from core.ids import prefixed_id
 from db.engine import session_factory
 from db.mappers import project_to_row, task_to_row
 from db.tables import ProjectRow, TaskEdgeRow, TaskRow
-from llm.client import get_client_for
+from llm.client import get_client
 from llm.schemas import Message
 from models.project import Project, ProjectStatus
 from models.task import (
@@ -512,8 +512,18 @@ async def decompose_project(project: Project) -> list[Task]:
     """
     log.info("planner.start", project_id=project.project_id, title=project.title)
 
-    client = get_client_for("planner", "planning")
+    from config import get_settings
     settings = get_settings()
+
+    # Planner generates a full task DAG — needs reliable structured JSON.
+    # Route to tier 2 in tiered mode so it gets a capable model.
+    if settings.llm_mode == "tiered":
+        from llm.tier_router import get_router
+        client = get_router()
+        _planner_kwargs = dict(tier=2, attempt_number=1, max_tokens=4096, retry_limit=1)
+    else:
+        client = get_client()
+        _planner_kwargs = dict(max_tokens=4096, retry_limit=1)
     last_error = "Unknown error"
 
     for attempt in range(1, MAX_PLAN_RETRIES + 1):
@@ -524,8 +534,7 @@ async def decompose_project(project: Project) -> list[Task]:
         try:
             raw_json, llm_result = await client.chat_json(
                 messages,
-                max_tokens=4096,
-                retry_limit=1,
+                **_planner_kwargs,
             )
         except Exception as exc:
             last_error = f"LLM call failed: {exc}"
@@ -573,20 +582,7 @@ async def decompose_project(project: Project) -> list[Task]:
             continue
 
         # ── All good — write to DB ─────────────────────────────────────────
-        try:
-            await _write_graph_to_db(project, tasks, edges)
-        except Exception as exc:
-            # DB failures are not LLM failures — retrying the LLM won't help.
-            # Break immediately so the retry loop exits cleanly and the
-            # "all retries exhausted" block below can set the project to REVIEW.
-            last_error = f"DB write failed: {exc}"
-            log.error(
-                "planner.db_write_error",
-                project_id=project.project_id,
-                attempt=attempt,
-                error=last_error,
-            )
-            break
+        await _write_graph_to_db(project, tasks, edges)
 
         log.info(
             "planner.success",
@@ -630,26 +626,7 @@ async def plan_and_run(project: Project) -> None:
             project_id=project.project_id,
             error=str(exc),
         )
-        # Safety net: decompose_project sets REVIEW before raising, but if that
-        # write itself failed the project could still be stuck at INTAKE forever.
-        # Re-apply REVIEW here so the project is always recoverable.
-        try:
-            async with session_factory() as db:
-                proj_row = await db.get(ProjectRow, project.project_id)
-                if proj_row and proj_row.status not in (
-                    ProjectStatus.REVIEW.value,
-                    "closure",
-                    "archived",
-                ):
-                    proj_row.status = ProjectStatus.REVIEW.value
-                    proj_row.updated_at = datetime.now(timezone.utc)
-        except Exception as db_exc:
-            log.error(
-                "planner.failsafe_status_update_failed",
-                project_id=project.project_id,
-                error=str(db_exc),
-            )
-        return
+        return  # project status already set to REVIEW inside decompose_project
 
     # Auto-start the engine — no human /run call needed
     try:

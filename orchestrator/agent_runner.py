@@ -20,8 +20,9 @@ from dataclasses import dataclass, field
 
 import structlog
 
-from llm.client import get_client_for
+from llm.client import get_client
 from llm.prompts import PromptBuilder
+from llm.tier_router import task_tier
 from llm.schemas import AgentInputBundle, AgentOutput, MemoryExcerpt
 from models.project import Project
 from models.task import Task
@@ -139,7 +140,27 @@ async def run_agent_for_task(
     )
 
     messages = _builder.build_messages(bundle)
-    client   = get_client_for(task.owner_department.value, task.type.value)
+
+    # Resolve client — use tiered router when LLM_MODE=tiered, else single client
+    from config import get_settings
+    _settings = get_settings()
+    if _settings.llm_mode == "tiered":
+        from llm.tier_router import get_router
+        _client     = get_router()
+        _tier       = task_tier(task, _settings)
+        _chat_kwargs = dict(
+            tier=_tier,
+            attempt_number=bundle.attempt_number,
+            max_tokens=task.budget.max_tokens,
+            retry_limit=2,
+        )
+    else:
+        _client     = get_client()
+        _tier       = None
+        _chat_kwargs = dict(
+            max_tokens=task.budget.max_tokens,
+            retry_limit=2,
+        )
 
     audit(
         AuditEventType.AGENT_STARTED,
@@ -158,16 +179,16 @@ async def run_agent_for_task(
         task_id=task.task_id,
         role=task.owner_department.value,
         attempt=bundle.attempt_number,
+        tier=_tier,
         messages=len(messages),
         workspace_artifacts=len(workspace_artifact_ids or []),
     )
 
     # ── LLM call ─────────────────────────────────────────────────────
     try:
-        raw_json, llm_result = await client.chat_json(
+        raw_json, llm_result = await _client.chat_json(
             messages,
-            max_tokens=task.budget.max_tokens,
-            retry_limit=2,
+            **_chat_kwargs,
         )
     except Exception as exc:
         latency_ms = int((time.monotonic() - t_start) * 1000)
