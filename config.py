@@ -188,6 +188,19 @@ class Settings(BaseSettings):
     vllm_base_url: str = "http://localhost:8000"
     sglang_base_url: str = "http://localhost:30000"
 
+    # ── Tool provider keys ────────────────────────────────────────────────────
+    # Web search
+    tavily_api_key: str = ""      # tavily.com — $0.01/search, best structured results
+    serper_api_key: str = ""      # serper.dev — $0.001/search, Google results
+    # (DuckDuckGo is always available as a free fallback — no key needed)
+
+    # Image generation
+    stability_api_key: str = ""   # stability.ai — paid, high quality
+    # (Pollinations.ai is always available free — no key needed)
+
+    # Audio / TTS
+    elevenlabs_api_key: str = ""  # elevenlabs.io — 10K chars/month free
+
     # ── Validation ────────────────────────────────────────────────────────────
     # 1.0 = full (for 70B+ or Claude). 0.75 = 13B-30B. 0.60 = 7B local.
     validation_score_scale: float = 1.0

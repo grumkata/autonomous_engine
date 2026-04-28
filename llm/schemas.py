@@ -345,6 +345,13 @@ class AgentOutput(BaseModel):
     # IDs of new artifacts created
     artifacts_created: list[str] = Field(default_factory=list)
 
+    # Tool calls the agent wants to make (processed by agent_runner before validation)
+    # Format: [{"tool": "web_search", "params": {"query": "..."}}, ...]
+    tool_calls: list[dict] = Field(
+        default_factory=list,
+        description="Tool calls to execute before producing final output.",
+    )
+
     # Blocking info (populated when status='blocked')
     blocked_reason: str = ""
     blocked_waiting_for: str = ""

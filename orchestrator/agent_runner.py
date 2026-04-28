@@ -23,7 +23,8 @@ import structlog
 from llm.client import get_client
 from llm.prompts import PromptBuilder
 from llm.tier_router import task_tier
-from llm.schemas import AgentInputBundle, AgentOutput, MemoryExcerpt
+from llm.schemas import AgentInputBundle, AgentOutput, MemoryExcerpt, Message
+from orchestrator.tools.registry import execute_tool, get_tools_for_department, build_tools_prompt
 from models.project import Project
 from models.task import Task
 from orchestrator.audit import AuditEventType, AuditSeverity, audit
@@ -211,6 +212,21 @@ async def run_agent_for_task(
         )
 
     latency_ms = int((time.monotonic() - t_start) * 1000)
+
+    # ── Tool execution loop ───────────────────────────────────────────
+    # If the LLM response includes tool_calls, execute them and
+    # feed results back before parsing the final output.
+    raw_json, llm_result, latency_ms = await _run_tool_loop(
+        raw_json=raw_json,
+        llm_result=llm_result,
+        task=task,
+        project=project,
+        messages=messages,
+        client=_client,
+        chat_kwargs=_chat_kwargs,
+        t_start=t_start,
+        latency_ms=latency_ms,
+    )
 
     # ── Parse output ─────────────────────────────────────────────────
     try:
@@ -447,3 +463,151 @@ def build_prior_attempt_summary(result: RunResult) -> str:
         f"Key findings: {preview}. "
         f"Confidence: {out.confidence:.0%}. {score_note}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Tool execution loop
+# ---------------------------------------------------------------------------
+
+_MAX_TOOL_ROUNDS = 5   # prevent infinite loops
+
+
+async def _run_tool_loop(
+    raw_json: dict,
+    llm_result,
+    task,
+    project,
+    messages: list,
+    client,
+    chat_kwargs: dict,
+    t_start: float,
+    latency_ms: int,
+) -> tuple[dict, any, int]:
+    """
+    Check if the LLM response includes tool_calls.
+    If so: execute each tool, append results to messages, re-call LLM.
+    Repeat up to _MAX_TOOL_ROUNDS times.
+
+    Returns (final_raw_json, final_llm_result, total_latency_ms).
+    """
+    import json as _json
+
+    department = task.owner_department.value
+    all_files_created: list[str] = []
+
+    for round_num in range(_MAX_TOOL_ROUNDS):
+        tool_calls = raw_json.get("tool_calls", [])
+        if not tool_calls:
+            break   # No tool calls — done
+
+        log.info(
+            "agent.tool_round",
+            task_id=task.task_id,
+            round=round_num + 1,
+            tools=[tc.get("tool") for tc in tool_calls],
+        )
+
+        # Execute all tool calls in this round
+        tool_results = []
+        for tc in tool_calls:
+            tool_name = tc.get("tool", "")
+            params    = tc.get("params", {})
+            result    = await execute_tool(
+                tool_name=tool_name,
+                params=params,
+                project_id=task.project_id,
+                task_id=task.task_id,
+                department=department,
+            )
+            tool_results.append(result)
+            if result.get("files_created"):
+                all_files_created.extend(result["files_created"])
+
+        # Build tool results message to feed back to LLM
+        results_text = "## Tool Results\n\n"
+        for i, (tc, result) in enumerate(zip(tool_calls, tool_results)):
+            results_text += f"### Tool {i+1}: {tc.get('tool')}\n"
+            if result.get("success"):
+                # Summarise result (avoid flooding context)
+                summarised = _summarise_tool_result(result)
+                results_text += f"Status: SUCCESS\n{summarised}\n\n"
+            else:
+                results_text += f"Status: FAILED\nError: {result.get('error', 'Unknown error')}\n\n"
+
+        results_text += (
+            "\nBased on these tool results, now produce your final JSON response. "
+            "Include any files_created paths in your artifacts_created field. "
+            "Do NOT include tool_calls in this response unless you need more information."
+        )
+
+        # Append tool results to conversation and re-call LLM
+        messages = list(messages)  # copy
+        messages.append(Message(role="assistant", content=_json.dumps(raw_json)))
+        messages.append(Message(role="user",      content=results_text))
+
+        try:
+            raw_json, llm_result = await client.chat_json(messages, **chat_kwargs)
+            latency_ms = int((time.monotonic() - t_start) * 1000)
+        except Exception as exc:
+            log.error("agent.tool_loop_llm_error", task_id=task.task_id, round=round_num+1, error=str(exc))
+            break   # return what we have
+
+    # Merge any tool-created files into artifacts_created
+    if all_files_created:
+        existing = raw_json.get("artifacts_created", [])
+        raw_json["artifacts_created"] = list(dict.fromkeys(existing + all_files_created))
+
+    return raw_json, llm_result, latency_ms
+
+
+def _summarise_tool_result(result: dict) -> str:
+    """Format a tool result concisely for injection into LLM context."""
+    tool = result.get("tool", "")
+
+    if tool == "web_search":
+        answer = result.get("answer", "")
+        items  = result.get("results", [])[:5]
+        lines  = []
+        if answer:
+            lines.append(f"Answer: {answer}")
+        for r in items:
+            lines.append(f"- {r.get('title', '')} ({r.get('url', '')})")
+            if r.get("snippet"):
+                lines.append(f"  {r['snippet'][:200]}")
+        return "\n".join(lines)
+
+    elif tool == "fetch_url":
+        title = result.get("title", "")
+        text  = result.get("text", "")[:3000]
+        return f"Title: {title}\n\n{text}"
+
+    elif tool == "execute_code":
+        stdout = result.get("stdout", "")[:2000]
+        stderr = result.get("stderr", "")[:500]
+        files  = result.get("files_created", [])
+        parts  = []
+        if stdout:
+            parts.append(f"Output:\n{stdout}")
+        if stderr:
+            parts.append(f"Errors:\n{stderr}")
+        if files:
+            parts.append(f"Files created: {', '.join(files)}")
+        return "\n".join(parts)
+
+    elif tool in ("generate_image", "create_diagram", "create_chart",
+                  "create_spreadsheet", "create_document"):
+        fname = result.get("filename", "")
+        path  = result.get("path", "")
+        return f"File created: {fname}\nPath: {path}"
+
+    elif tool == "read_file":
+        content = result.get("content", "")[:3000]
+        return f"File content ({result.get('type', 'text')}):\n{content}"
+
+    elif tool == "text_to_speech":
+        return f"Audio saved: {result.get('filename', '')} via {result.get('provider', '')}"
+
+    else:
+        import json as _json
+        return _json.dumps({k: v for k, v in result.items()
+                            if k not in ("tool", "success", "files_created")}, indent=2)[:2000]

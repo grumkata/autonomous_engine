@@ -394,6 +394,14 @@ class PromptBuilder:
         if skill_contents:
             skill_block = "\n\n---\n\n".join(skill_contents)
             prompt = skill_block + "\n\n---\n\n" + prompt
+        # Tool capability injection
+        try:
+            from orchestrator.tools.registry import build_tools_prompt
+            tools_section = build_tools_prompt(agent_role.lower())
+            if tools_section:
+                prompt = prompt + "\n\n---\n\n" + tools_section
+        except Exception:
+            pass  # never break the prompt build
         return Message(role="system", content=prompt)
 
     # ------------------------------------------------------------------
