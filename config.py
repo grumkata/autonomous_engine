@@ -5,116 +5,195 @@ from functools import lru_cache
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    # App
+    # ── App ───────────────────────────────────────────────────────────────────
     app_name: str = "Autonomous AI Engine"
     app_version: str = "0.1.0"
     debug: bool = False
     log_level: str = "INFO"
 
-    # Database
+    # ── Database / Vector store ───────────────────────────────────────────────
     database_url: str = "sqlite+aiosqlite:///./engine.db"
-
-    # Vector store
     chroma_host: str = "localhost"
     chroma_port: int = 8001
     chroma_persist_dir: str = "./chroma_data"
 
-    # ── LLM Mode ──────────────────────────────────────────────────────────────
-    # "single"  — use one provider for everything (original behaviour)
-    # "tiered"  — use the tier routing system (recommended)
+    # ── LLM mode ─────────────────────────────────────────────────────────────
+    # "single"  — one provider for everything (LLM_PROVIDER)
+    # "tiered"  — route tasks to cheapest capable provider (recommended)
     llm_mode: str = "single"
+    llm_provider: str = "ollama"  # used in single mode
 
-    # ── Single-provider mode ──────────────────────────────────────────────────
-    llm_provider: str = "ollama"
-
-    # ── Tiered provider pools ────────────────────────────────────────────────
-    #
-    # TIER 1 — Free, no practical limits. Handles majority of work.
-    #   Recommended: groq,cerebras,sambanova,ollama
-    #   Tasks: quality_threshold < tier1_max_threshold AND attempt 1
-    #
-    # TIER 2 — Free, rate-limited. For more important tasks.
-    #   Recommended: gemini,openrouter (70B :free models)
-    #   gemini-1.5-flash is 15 RPM / 1M tokens/day free — extremely generous
-    #
-    # TIER 3 — Paid, opt-in. TIER3_ENABLED=false by default.
-    #   Recommended: anthropic,deepseek (deepseek is near-free at $0.07/1M)
-    #   Only activates when TIER3_ENABLED=true or toggled per-project
-    #
-    tier1_providers: str = "groq,ollama"
-    tier2_providers: str = "gemini,openrouter"
+    # ── Tier pools ────────────────────────────────────────────────────────────
+    # Comma-separated. Providers with missing API keys are silently skipped.
+    tier1_providers: str = "groq,cerebras,ollama"
+    tier2_providers: str = "gemini,openrouter,sambanova"
     tier3_providers: str = "anthropic,deepseek"
     tier3_enabled: bool = False
+    tier1_max_threshold: float = 0.72
+    tier2_max_threshold: float = 0.84
 
-    # Threshold boundaries for tier assignment
-    tier1_max_threshold: float = 0.72   # below this → tier 1
-    tier2_max_threshold: float = 0.84   # below this → tier 2, above → tier 3
+    # ────────────────────────────────────────────────────────────────────────
+    # PROVIDER KEYS + MODELS
+    # Only add keys for providers you list in TIER*_PROVIDERS above.
+    # ────────────────────────────────────────────────────────────────────────
 
-    # ── Ollama ────────────────────────────────────────────────────────────────
+    # ── Ollama (local, always free) ───────────────────────────────────────────
     ollama_base_url: str = "http://localhost:11434"
     ollama_default_model: str = "llama3.1:8b"
     ollama_timeout_seconds: int = 120
     ollama_api_key: str = ""
 
-    # ── Groq (free tier) ──────────────────────────────────────────────────────
-    # console.groq.com — no credit card. 14,400 req/day on 8B, ~500/day on 70B+
-    # Tier 1 model: llama-3.1-8b-instant (very fast)
-    # Tier 2 model: llama-3.3-70b-versatile (change groq_default_model)
+    # ── Groq — free, 14.4K req/day — console.groq.com ────────────────────────
     groq_api_key: str = ""
     groq_default_model: str = "llama-3.1-8b-instant"
+    # Tier 2 upgrade: llama-3.3-70b-versatile
 
-    # ── OpenRouter (free :free models) ───────────────────────────────────────
-    # openrouter.ai — no credit card for free models
-    # Good free options: meta-llama/llama-3.3-70b-instruct:free
-    openrouter_api_key: str = ""
-    openrouter_default_model: str = "meta-llama/llama-3.3-70b-instruct:free"
-
-    # ── Cerebras Cloud (free, 1000+ tokens/sec) ──────────────────────────────
-    # cloud.cerebras.ai — free, no credit card
-    # Free models: llama-3.3-70b, llama-3.1-8b
+    # ── Cerebras — free, 1M tok/day, 2600 tok/s — cloud.cerebras.ai ──────────
     cerebras_api_key: str = ""
     cerebras_default_model: str = "llama-3.3-70b"
 
-    # ── SambaNova Cloud (free, large models) ─────────────────────────────────
-    # cloud.sambanova.ai — free, no credit card
-    # Has Llama 3.1 405B free — largest freely available model anywhere
-    # Free models: Meta-Llama-3.3-70B-Instruct, Meta-Llama-3.1-405B-Instruct
+    # ── SiliconFlow — free, 1K RPM / 50K TPM — siliconflow.cn ────────────────
+    siliconflow_api_key: str = ""
+    siliconflow_default_model: str = "Qwen/Qwen3-8B"
+
+    # ── LLM7.io — free, no key needed, 30-120 RPM — llm7.io ─────────────────
+    llm7_default_model: str = "deepseek-ai/DeepSeek-R1"
+
+    # ── Kluster AI — free, Qwen3-235B, Llama 4 — kluster.ai ─────────────────
+    kluster_api_key: str = ""
+    kluster_default_model: str = "klusterai/Meta-Llama-3.3-70B-Instruct-Turbo"
+
+    # ── BazaarLink — free, multi-model router — bazaarlink.ai ────────────────
+    bazaarlink_api_key: str = ""
+    bazaarlink_default_model: str = "auto:free"
+
+    # ── Pollinations.ai — free, no key needed — pollinations.ai ──────────────
+    pollinations_default_model: str = "openai-large"
+
+    # ── Ollama Cloud — free session limits — ollama.com ──────────────────────
+    ollama_cloud_api_key: str = ""
+    ollama_cloud_default_model: str = "deepseek-v3.2"
+
+    # ── Featherless.ai — free, 4000+ models — featherless.ai ─────────────────
+    featherless_api_key: str = ""
+    featherless_default_model: str = "meta-llama/Meta-Llama-3.1-70B-Instruct"
+
+    # ── GitHub Models — free for GitHub users — github.com/marketplace/models ─
+    github_models_api_key: str = ""
+    github_models_default_model: str = "meta-llama-3.3-70b-instruct"
+
+    # ── Hugging Face — free, 2K req/day — huggingface.co ─────────────────────
+    huggingface_api_key: str = ""
+    huggingface_default_model: str = "meta-llama/Llama-3.3-70B-Instruct"
+
+    # ── Google Gemini — free, 10 RPM / 1M context — aistudio.google.com ──────
+    gemini_api_key: str = ""
+    gemini_default_model: str = "gemini-2.5-flash"
+
+    # ── SambaNova — free, 10-30 RPM — cloud.sambanova.ai ─────────────────────
     sambanova_api_key: str = ""
     sambanova_default_model: str = "Meta-Llama-3.3-70B-Instruct"
 
-    # ── Google Gemini (best free tier for Tier 2) ─────────────────────────────
-    # aistudio.google.com — no billing required
-    # gemini-1.5-flash: 15 RPM, 1,000,000 tokens/day FREE
-    # gemini-2.0-flash-exp: experimental, very capable
-    gemini_api_key: str = ""
-    gemini_default_model: str = "gemini-1.5-flash"
+    # ── OpenRouter — free :free models, 20 RPM — openrouter.ai ──────────────
+    openrouter_api_key: str = ""
+    openrouter_default_model: str = "meta-llama/llama-3.3-70b-instruct:free"
 
-    # ── Mistral (free experimental tier) ─────────────────────────────────────
-    # console.mistral.ai — limited free tier
+    # ── Mistral — free Experiment plan, 1B tok/month — console.mistral.ai ────
     mistral_api_key: str = ""
     mistral_default_model: str = "mistral-small-latest"
 
-    # ── DeepSeek (near-free paid — great tier 3 option) ──────────────────────
-    # platform.deepseek.com — V3: ~$0.07/1M input, $0.28/1M output tokens
-    # Practically free for development. Strong coder + planner.
-    deepseek_api_key: str = ""
-    deepseek_default_model: str = "deepseek-chat"
+    # ── Cohere — free Trial, 1K req/month, best RAG — cohere.com ─────────────
+    cohere_api_key: str = ""
+    cohere_default_model: str = "command-r-plus"
 
-    # ── Anthropic Claude (paid, tier 3) ──────────────────────────────────────
-    # Only called when tier3_enabled=true or toggled per-project
-    # claude-haiku-4-5-20251001: $0.25/$1.25 per 1M tokens (fast, cheap)
+    # ── NVIDIA NIM — free 1K credits, 40 RPM — build.nvidia.com ─────────────
+    nvidia_nim_api_key: str = ""
+    nvidia_nim_default_model: str = "meta/llama-3.3-70b-instruct"
+
+    # ── Zhipu AI — GLM-4-Flash free, NO rate cap — open.bigmodel.cn ──────────
+    zhipu_api_key: str = ""
+    zhipu_default_model: str = "glm-4-flash"
+
+    # ── Moonshot (Kimi) — 1M context, long docs — platform.moonshot.cn ───────
+    moonshot_api_key: str = ""
+    moonshot_default_model: str = "moonshot-v1-128k"
+
+    # ── Together AI — 200+ models, free :Free models — together.ai ───────────
+    together_api_key: str = ""
+    together_default_model: str = "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"
+
+    # ── AI21 Labs — Jamba 256K context, 1B tok/month free — ai21.com ─────────
+    ai21_api_key: str = ""
+    ai21_default_model: str = "jamba-1.6-mini"
+
+    # ── Anthropic Claude — paid, tier 3 — anthropic.com ──────────────────────
     anthropic_api_key: str = ""
     anthropic_default_model: str = "claude-haiku-4-5-20251001"
     anthropic_timeout_seconds: int = 120
 
-    # ── Validation tuning ────────────────────────────────────────────────────
-    # 1.0 = full thresholds (for 70B+ or Claude-class models)
-    # 0.75 = for 13B-30B models
-    # 0.60 = minimum viable for 7B local models
+    # ── DeepSeek — ~$0.07/1M tokens — platform.deepseek.com ─────────────────
+    deepseek_api_key: str = ""
+    deepseek_default_model: str = "deepseek-chat"
+
+    # ── OpenAI — GPT-4.1, o3 — platform.openai.com ───────────────────────────
+    openai_api_key: str = ""
+    openai_default_model: str = "gpt-4.1-mini"
+
+    # ── xAI Grok — 2M context, real-time web — console.x.ai ─────────────────
+    xai_api_key: str = ""
+    xai_default_model: str = "grok-3-fast"
+
+    # ── Fireworks AI — FireAttention 4x faster — fireworks.ai ────────────────
+    fireworks_api_key: str = ""
+    fireworks_default_model: str = "accounts/fireworks/models/llama-v3p3-70b-instruct"
+
+    # ── Hyperbolic — 80% cheaper than AWS — hyperbolic.xyz ───────────────────
+    hyperbolic_api_key: str = ""
+    hyperbolic_default_model: str = "meta-llama/Llama-3.3-70B-Instruct"
+
+    # ── DeepInfra — cheapest hosted open-source — deepinfra.com ──────────────
+    deepinfra_api_key: str = ""
+    deepinfra_default_model: str = "meta-llama/Llama-3.3-70B-Instruct"
+
+    # ── Perplexity Sonar — LLM + web search — pplx.ai ────────────────────────
+    perplexity_api_key: str = ""
+    perplexity_default_model: str = "sonar"
+
+    # ── AI/ML API — 300+ models unified — aimlapi.com ────────────────────────
+    aimlapi_api_key: str = ""
+    aimlapi_default_model: str = "gpt-4o"
+
+    # ── 01.AI (Yi) — 200K context, bilingual — platform.lingyiwanwu.com ──────
+    yi_api_key: str = ""
+    yi_default_model: str = "yi-large"
+
+    # ── Alibaba Qwen — Qwen3-235B, multilingual — dashscope.aliyuncs.com ─────
+    qwen_api_key: str = ""
+    qwen_default_model: str = "qwen-plus"
+
+    # ── Novita AI — multi-modal budget — novita.ai ────────────────────────────
+    novita_api_key: str = ""
+    novita_default_model: str = "meta-llama/llama-3.3-70b-instruct"
+
+    # ── Lambda Labs — H100 clusters — lambda.chat ────────────────────────────
+    lambda_api_key: str = ""
+    lambda_default_model: str = "llama3.3-70b-instruct-fp8"
+
+    # ── LOCAL: self-hosted OpenAI-compat servers ──────────────────────────────
+    # Add any of these to any tier (they are always free)
+    lmstudio_base_url: str = "http://localhost:1234"
+    jan_base_url: str = "http://localhost:1337"
+    localai_base_url: str = "http://localhost:8080"
+    llamacpp_base_url: str = "http://localhost:8080"
+    vllm_base_url: str = "http://localhost:8000"
+    sglang_base_url: str = "http://localhost:30000"
+
+    # ── Validation ────────────────────────────────────────────────────────────
+    # 1.0 = full (for 70B+ or Claude). 0.75 = 13B-30B. 0.60 = 7B local.
     validation_score_scale: float = 1.0
 
-    # ── Orchestration limits ──────────────────────────────────────────────────
-    # For local Ollama: 1-2. For fast cloud providers: 4-8.
+    # ── Orchestration ─────────────────────────────────────────────────────────
+    # Local Ollama: 1-2. Fast cloud APIs: 4-8.
     max_concurrent_tasks: int = 4
     task_default_retry_limit: int = 3
 
