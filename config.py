@@ -192,14 +192,22 @@ class Settings(BaseSettings):
     # Web search
     tavily_api_key: str = ""      # tavily.com — $0.01/search, best structured results
     serper_api_key: str = ""      # serper.dev — $0.001/search, Google results
-    # (DuckDuckGo is always available as a free fallback — no key needed)
+    # (DuckDuckGo always available as free fallback — no key needed)
 
     # Image generation
-    stability_api_key: str = ""   # stability.ai — paid, high quality
-    # (Pollinations.ai is always available free — no key needed)
+    stability_api_key: str = ""   # stability.ai — paid, high quality images
+    # (Pollinations.ai always available free — no key needed)
 
     # Audio / TTS
-    elevenlabs_api_key: str = ""  # elevenlabs.io — 10K chars/month free
+    elevenlabs_api_key: str = ""  # elevenlabs.io — 10K chars/month free tier
+    # (gTTS always available as free fallback — pip install gTTS)
+
+    # Shell workspace
+    shell_use_docker: bool = False  # set True for stronger isolation (planned)
+
+    # Vision / screenshot
+    # (playwright for screenshots: pip install playwright && playwright install chromium)
+    # (pymupdf for PDF rendering: pip install pymupdf)
 
     # ── Validation ────────────────────────────────────────────────────────────
     # 1.0 = full (for 70B+ or Claude). 0.75 = 13B-30B. 0.60 = 7B local.

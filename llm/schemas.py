@@ -1,211 +1,223 @@
 """
-LLM schemas — Pydantic models for the Ollama wire format and
-the agent input/output contracts defined in spec §6.3–6.5.
+llm/schemas.py — All data contracts for the LLM layer.
 
-Wire format mirrors the Ollama REST API exactly so the client can
-serialize/deserialize without manual mapping.
+Key upgrade: Message now supports multimodal content (text + images + audio)
+using the OpenAI vision content format, which is compatible with:
+  - All OpenAI-compat providers (Groq, Cerebras, Gemini, etc.)
+  - Anthropic (via anthropic_provider.py adapter)
+  - Ollama vision models (llava, bakllava, moondream, etc.)
 
-Agent schemas (AgentInputBundle, AgentOutput) are what the orchestration
-engine (Phase 2) passes to agents, and what agents must return.
+Content formats:
+  Simple text:    Message(role="user", content="hello")
+  Multimodal:     Message(role="user", content=[
+                    {"type": "text", "text": "What is in this image?"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+                  ])
 """
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timezone
-from enum import StrEnum
+from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
-# Wire format — mirrors Ollama /api/chat and /api/generate
+# Message — supports text-only and multimodal content
 # ---------------------------------------------------------------------------
 
 
 class Message(BaseModel):
-    """A single message in a conversation (system / user / assistant)."""
+    """
+    A single message. content can be a plain string (text-only)
+    or a list of content blocks (multimodal — text + images + audio).
+
+    Multimodal block types (OpenAI vision format):
+        {"type": "text",      "text": "..."}
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+        {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}}
+    """
 
     role: Literal["system", "user", "assistant"]
-    content: str
+    content: str | list[dict[str, Any]]
 
     def __repr__(self) -> str:
-        preview = self.content[:60].replace("\n", " ")
-        return f"Message(role={self.role!r}, content={preview!r}{'…' if len(self.content) > 60 else ''})"
+        if isinstance(self.content, str):
+            preview = self.content[:60].replace("\n", " ")
+            return f"Message(role={self.role!r}, content={preview!r}{'…' if len(self.content) > 60 else ''})"
+        return f"Message(role={self.role!r}, content=[{len(self.content)} blocks])"
+
+    @property
+    def text_content(self) -> str:
+        """Return the text portion of the content regardless of format."""
+        if isinstance(self.content, str):
+            return self.content
+        return " ".join(
+            block.get("text", "")
+            for block in self.content
+            if block.get("type") == "text"
+        )
+
+    @property
+    def has_images(self) -> bool:
+        if isinstance(self.content, list):
+            return any(b.get("type") == "image_url" for b in self.content)
+        return False
+
+    def to_api_dict(self) -> dict[str, Any]:
+        """Serialise for the OpenAI-compat API wire format."""
+        return {"role": self.role, "content": self.content}
+
+    # ------------------------------------------------------------------
+    # Convenience constructors
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def text(cls, role: Literal["system", "user", "assistant"], text: str) -> "Message":
+        return cls(role=role, content=text)
+
+    @classmethod
+    def with_images(
+        cls,
+        role: Literal["system", "user", "assistant"],
+        text: str,
+        image_paths: list[str | Path] | None = None,
+        image_urls: list[str] | None = None,
+        image_b64s: list[tuple[str, str]] | None = None,  # [(mime, b64data), ...]
+    ) -> "Message":
+        """
+        Build a multimodal message with text + images.
+
+        Args:
+            image_paths:  Local file paths — read and base64-encode automatically.
+            image_urls:   Remote URLs — passed through directly.
+            image_b64s:   Pre-encoded: [(mime_type, base64_data), ...]
+        """
+        blocks: list[dict] = [{"type": "text", "text": text}]
+
+        for path in (image_paths or []):
+            path = Path(path)
+            mime = _mime_for_path(path)
+            b64  = base64.b64encode(path.read_bytes()).decode()
+            blocks.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{b64}"},
+            })
+
+        for url in (image_urls or []):
+            blocks.append({"type": "image_url", "image_url": {"url": url}})
+
+        for mime, b64data in (image_b64s or []):
+            blocks.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{b64data}"},
+            })
+
+        return cls(role=role, content=blocks)
+
+
+def _mime_for_path(path: Path) -> str:
+    ext = path.suffix.lower()
+    return {
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+    }.get(ext, "image/png")
+
+
+# ---------------------------------------------------------------------------
+# Ollama-specific (kept for ollama provider compatibility)
+# ---------------------------------------------------------------------------
 
 
 class OllamaOptions(BaseModel):
-    """
-    Subset of Ollama model options passed in the 'options' field.
-    All optional — Ollama uses its defaults when omitted.
-    """
-
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
-    top_k: int | None = Field(default=None, ge=1)
-    num_predict: int | None = Field(
-        default=None,
-        description="Max tokens to generate. Maps to max_tokens in OpenAI terminology.",
-    )
-    stop: list[str] | None = None
+    top_p:       float | None = Field(default=None, ge=0.0, le=1.0)
+    top_k:       int   | None = Field(default=None, ge=1)
+    num_predict: int   | None = None
+    stop:        list[str] | None = None
     repeat_penalty: float | None = Field(default=None, ge=0.0)
-    seed: int | None = None
+    seed:        int   | None = None
 
     def to_ollama_dict(self) -> dict[str, Any]:
-        """Drop None values — Ollama ignores unset options but keeping nulls is noisy."""
         return {k: v for k, v in self.model_dump().items() if v is not None}
 
 
 class ChatRequest(BaseModel):
-    """Request body for POST /api/chat."""
-
-    model: str
+    model:    str
     messages: list[Message]
-    stream: bool = False
-    options: OllamaOptions = Field(default_factory=OllamaOptions)
-    keep_alive: str = "5m"  # how long to keep model in VRAM after response
+    stream:   bool = False
+    options:  OllamaOptions = Field(default_factory=OllamaOptions)
+    keep_alive: str = "5m"
 
     def to_ollama_dict(self) -> dict[str, Any]:
         return {
-            "model": self.model,
-            "messages": [m.model_dump() for m in self.messages],
-            "stream": self.stream,
-            "options": self.options.to_ollama_dict(),
+            "model":    self.model,
+            "messages": [m.to_api_dict() for m in self.messages],
+            "stream":   self.stream,
+            "options":  self.options.to_ollama_dict(),
             "keep_alive": self.keep_alive,
         }
 
 
 class GenerateRequest(BaseModel):
-    """Request body for POST /api/generate (single-turn, no message history)."""
-
-    model: str
+    model:  str
     prompt: str
-    system: str = ""
     stream: bool = False
     options: OllamaOptions = Field(default_factory=OllamaOptions)
 
     def to_ollama_dict(self) -> dict[str, Any]:
-        d: dict[str, Any] = {
-            "model": self.model,
-            "prompt": self.prompt,
-            "stream": self.stream,
+        return {
+            "model":   self.model,
+            "prompt":  self.prompt,
+            "stream":  self.stream,
             "options": self.options.to_ollama_dict(),
         }
-        if self.system:
-            d["system"] = self.system
-        return d
+
+
+# ---------------------------------------------------------------------------
+# LLM response types
+# ---------------------------------------------------------------------------
 
 
 class UsageStats(BaseModel):
-    """Token counts extracted from the Ollama response."""
-
-    prompt_tokens: int = 0
+    prompt_tokens:     int = 0
     completion_tokens: int = 0
-    total_tokens: int = 0
-
-    @classmethod
-    def from_ollama_response(cls, data: dict[str, Any]) -> "UsageStats":
-        prompt = data.get("prompt_eval_count", 0) or 0
-        completion = data.get("eval_count", 0) or 0
-        return cls(
-            prompt_tokens=prompt,
-            completion_tokens=completion,
-            total_tokens=prompt + completion,
-        )
+    total_tokens:      int = 0
 
 
 class ChatResponse(BaseModel):
-    """Parsed response from POST /api/chat (non-streaming)."""
-
-    model: str
-    message: Message
-    done: bool = True
+    model:      str
+    message:    Message
+    done:       bool = True
     done_reason: str = "stop"
-    usage: UsageStats = Field(default_factory=UsageStats)
-    total_duration_ms: int | None = None
+    usage:      UsageStats = Field(default_factory=UsageStats)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
     def content(self) -> str:
-        """Convenience accessor for the assistant message text."""
-        return self.message.content
-
-    @classmethod
-    def from_ollama_dict(cls, data: dict[str, Any]) -> "ChatResponse":
-        total_ns = data.get("total_duration")
-        return cls(
-            model=data["model"],
-            message=Message(**data["message"]),
-            done=data.get("done", True),
-            done_reason=data.get("done_reason", "stop"),
-            usage=UsageStats.from_ollama_response(data),
-            total_duration_ms=int(total_ns / 1_000_000) if total_ns else None,
-        )
+        return self.message.text_content
 
 
 class StreamChunk(BaseModel):
-    """
-    A single chunk from a streaming /api/chat response.
-    When done=True this is the final chunk and carries usage stats.
-    """
-
-    model: str
+    model:   str
     message: Message
-    done: bool
-    usage: UsageStats | None = None
-
-    @classmethod
-    def from_ollama_dict(cls, data: dict[str, Any]) -> "StreamChunk":
-        done = data.get("done", False)
-        return cls(
-            model=data["model"],
-            message=Message(**data["message"]),
-            done=done,
-            usage=UsageStats.from_ollama_response(data) if done else None,
-        )
-
-
-class ModelInfo(BaseModel):
-    """Entry in the GET /api/tags response."""
-
-    name: str
-    modified_at: str | None = None
-    size: int | None = None  # bytes
-    digest: str | None = None
+    done:    bool = False
+    usage:   UsageStats | None = None
 
     @property
-    def size_gb(self) -> float | None:
-        return round(self.size / 1e9, 2) if self.size else None
-
-
-class AvailableModels(BaseModel):
-    models: list[ModelInfo] = Field(default_factory=list)
-
-    def has_model(self, name: str) -> bool:
-        """Check by exact name or base name (ignores tag suffix)."""
-        base = name.split(":")[0]
-        for m in self.models:
-            if m.name == name or m.name.split(":")[0] == base:
-                return True
-        return False
-
-
-# ---------------------------------------------------------------------------
-# LLM call result — wraps ChatResponse with retry / timing metadata
-# ---------------------------------------------------------------------------
+    def content(self) -> str:
+        return self.message.text_content
 
 
 class LLMResult(BaseModel):
-    """
-    What the client returns to callers — includes the response plus
-    execution metadata useful for the audit trail (Phase 7).
-    """
-
-    response: ChatResponse
-    attempt_number: int = 1
+    response:        ChatResponse
+    attempt_number:  int = 1
     total_latency_ms: int = 0
-    model_used: str = ""
-    was_retried: bool = False
+    model_used:      str = ""
+    was_retried:     bool = False
 
     @property
     def content(self) -> str:
@@ -217,149 +229,91 @@ class LLMResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Agent I/O contracts (spec §6.3–6.5)
+# Agent I/O contracts
 # ---------------------------------------------------------------------------
 
 
 class MemoryExcerpt(BaseModel):
-    """
-    A single retrieved memory item passed into an agent's input bundle.
-    Stripped down from the full MemoryObject — agents see only what they need.
-    """
-
-    memory_id: str
-    category: str
-    title: str
-    content: str
+    memory_id:  str
+    category:   str
+    title:      str
+    content:    str
     confidence: float
-    relevance: float
-    tags: list[str] = Field(default_factory=list)
+    relevance:  float
+    tags:       list[str] = Field(default_factory=list)
 
 
 class AgentInputBundle(BaseModel):
-    """
-    The full context package delivered to an agent before it runs (spec §6.4).
-    Built by PromptBuilder.assemble_bundle() using task + memory retrieval.
+    """Full context package delivered to an agent before it runs."""
 
-    Principle: an agent receives ONLY the context required for its role.
-    This bundle is what becomes the prompt messages list.
-    """
+    agent_role:  str
+    task_id:     str
+    project_id:  str
 
-    # Identity
-    agent_role: str  # DepartmentOwner value
-    task_id: str
-    project_id: str
+    task_objective:  str
+    task_description: str = ""
 
-    # Core task
-    task_objective: str = Field(description="Clear statement of what this task must produce.")
-    task_description: str = Field(default="")
-
-    # Project context (subset only — not the full project state)
-    project_title: str = ""
-    primary_goal: str = ""
+    project_title:    str = ""
+    primary_goal:     str = ""
     hard_constraints: list[str] = Field(default_factory=list)
 
-    # Memory context (retrieved, ranked, de-duplicated by Phase 3)
     relevant_memories: list[MemoryExcerpt] = Field(default_factory=list)
-    prior_failures: list[MemoryExcerpt] = Field(default_factory=list)
+    prior_failures:    list[MemoryExcerpt] = Field(default_factory=list)
 
-    # Validation & output expectations
-    validation_criteria: list[str] = Field(default_factory=list)
-    expected_output_types: list[str] = Field(default_factory=list)
-    quality_threshold: float = 0.75
+    validation_criteria:    list[str] = Field(default_factory=list)
+    expected_output_types:  list[str] = Field(default_factory=list)
+    quality_threshold:      float = 0.75
 
-    # Phase 3: workspace artifact shelf
-    input_artifact_ids: list[str] = Field(
-        default_factory=list,
-        description="IDs of approved upstream artifacts on this workspace's shelf.",
-    )
+    input_artifact_ids: list[str] = Field(default_factory=list)
+    skill_contents:     list[str] = Field(default_factory=list)
 
-    # Phase 4: skill instruction content — prepended to system prompt
-    skill_contents: list[str] = Field(
-        default_factory=list,
-        description="Loaded SKILL.md texts for skills required by this task.",
-    )
+    attempt_number:       int = 1
+    corrective_feedback:  str = ""
+    prior_attempt_summary: str = ""
 
-    # Retry context — injected on second+ attempt
-    attempt_number: int = 1
-    corrective_feedback: str = Field(
-        default="",
-        description="Specific feedback from the previous failed attempt. Empty on first try.",
-    )
-    prior_attempt_summary: str = Field(
-        default="",
-        description="Brief summary of what the prior attempt produced. Empty on first try.",
-    )
+    human_notes: list[str] = Field(default_factory=list)
 
-    # Phase 6: human operator notes
-    human_notes: list[str] = Field(
-        default_factory=list,
-        description="Notes injected by the human operator via the governance API.",
-    )
-
-    # Budget
-    max_tokens: int = 4096
+    max_tokens:          int = 4096
     max_runtime_seconds: int = 300
+
+    # Multimodal inputs — images/files the agent can "see"
+    visual_inputs: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Pre-rendered visual representations of workspace files. "
+            "Each item: {path, type, b64, mime, description}. "
+            "Injected as image blocks in the user message for vision-capable models."
+        ),
+    )
 
 
 class AgentOutput(BaseModel):
-    """
-    Structured output every agent must return (spec §6.5).
+    """Structured output every agent must return."""
 
-    The orchestration engine reads this to decide:
-    - Whether to promote outputs to memory
-    - Whether to send to validation
-    - Whether to extract memory candidates
-    - What to pass to downstream tasks
-    """
-
-    task_id: str
+    task_id:    str
     agent_role: str
+    status:     Literal["complete", "blocked", "needs_clarification"]
 
-    status: Literal["complete", "blocked", "needs_clarification"] = "complete"
-
-    # Core content
-    summary: str = Field(..., min_length=10, description="One-paragraph summary of what was produced.")
-    findings: list[str] = Field(default_factory=list)
+    summary:         str
+    findings:        list[str] = Field(default_factory=list)
     recommendations: list[str] = Field(default_factory=list)
-    risks: list[str] = Field(default_factory=list)
-    assumptions: list[str] = Field(default_factory=list)
+    risks:           list[str] = Field(default_factory=list)
+    assumptions:     list[str] = Field(default_factory=list)
+    confidence:      float = 0.5
 
-    # Quality signals
-    confidence: float = Field(default=0.7, ge=0.0, le=1.0)
-    evidence_refs: list[str] = Field(
-        default_factory=list,
-        description="Memory IDs, artifact IDs, or source URLs supporting key claims.",
-    )
+    evidence_refs:   list[str] = Field(default_factory=list)
+    open_questions:  list[str] = Field(default_factory=list)
+    next_actions:    list[str] = Field(default_factory=list)
 
-    # For the orchestrator and next tasks
-    open_questions: list[str] = Field(default_factory=list)
-    next_actions: list[str] = Field(default_factory=list)
+    memory_candidates: list[dict[str, Any]] = Field(default_factory=list)
 
-    # Memory candidates the agent wants to persist (MemoryManager decides whether to accept)
-    memory_candidates: list[dict[str, Any]] = Field(
-        default_factory=list,
-        description="Each dict has: category, title, content, confidence, tags.",
-    )
-
-    # IDs of new artifacts created
     artifacts_created: list[str] = Field(default_factory=list)
 
-    # Tool calls the agent wants to make (processed by agent_runner before validation)
-    # Format: [{"tool": "web_search", "params": {"query": "..."}}, ...]
+    # Tool calls the agent wants to make
     tool_calls: list[dict] = Field(
         default_factory=list,
         description="Tool calls to execute before producing final output.",
     )
 
-    # Blocking info (populated when status='blocked')
-    blocked_reason: str = ""
+    blocked_reason:      str = ""
     blocked_waiting_for: str = ""
-
-    # Raw LLM output preserved for debugging / audit trail
-    raw_llm_content: str = Field(default="", exclude=True)
-
-    @field_validator("confidence")
-    @classmethod
-    def round_confidence(cls, v: float) -> float:
-        return round(v, 3)

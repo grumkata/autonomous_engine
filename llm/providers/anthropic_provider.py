@@ -126,7 +126,7 @@ class AnthropicProvider(LLMProvider):
         body: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens or 4096,
-            "messages": [{"role": m.role, "content": m.content} for m in user_messages],
+            "messages": [self._to_anthropic_message(m) for m in user_messages],
         }
         if system_prompt:
             body["system"] = system_prompt
@@ -168,7 +168,7 @@ class AnthropicProvider(LLMProvider):
         body: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens or 4096,
-            "messages": [{"role": m.role, "content": m.content} for m in user_messages],
+            "messages": [self._to_anthropic_message(m) for m in user_messages],
             "stream": True,
         }
         if system_prompt:
@@ -241,7 +241,45 @@ class AnthropicProvider(LLMProvider):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _split_system(messages: list[Message]) -> tuple[str, list[Message]]:
+    def _to_anthropic_message(m: "Message") -> dict:
+        """
+        Convert a Message to Anthropic's wire format.
+        Handles both plain text and multimodal content (OpenAI vision format → Anthropic format).
+        Anthropic uses {type: "image", source: {type: "base64", media_type, data}} blocks.
+        """
+        if isinstance(m.content, str):
+            return {"role": m.role, "content": m.content}
+
+        # Multimodal — convert OpenAI vision blocks to Anthropic format
+        anthropic_blocks = []
+        for block in m.content:
+            btype = block.get("type", "")
+            if btype == "text":
+                anthropic_blocks.append({"type": "text", "text": block.get("text", "")})
+            elif btype == "image_url":
+                url = block.get("image_url", {}).get("url", "")
+                if url.startswith("data:"):
+                    # data:image/png;base64,<data>
+                    header, data = url.split(",", 1)
+                    media_type = header.split(":")[1].split(";")[0]
+                    anthropic_blocks.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": data,
+                        },
+                    })
+                else:
+                    # Remote URL — Anthropic supports url source type
+                    anthropic_blocks.append({
+                        "type": "image",
+                        "source": {"type": "url", "url": url},
+                    })
+        return {"role": m.role, "content": anthropic_blocks}
+
+    @staticmethod
+    def _split_system(messages: list["Message"]) -> tuple[str, list["Message"]]:
         """
         Anthropic requires system prompt as a top-level field, not a message.
         Extract leading system messages and return (system_str, remaining_messages).

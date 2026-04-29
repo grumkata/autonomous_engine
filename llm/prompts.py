@@ -514,7 +514,23 @@ class PromptBuilder:
             )
         )
 
-        return Message(role="user", content="\n\n".join(sections))
+        text_content = "\n\n".join(sections)
+
+        # 10. Visual inputs — inject images/PDFs/etc as multimodal blocks
+        #     If the model supports vision, agents literally see the files.
+        if bundle.visual_inputs:
+            content_blocks: list[dict] = [{"type": "text", "text": text_content}]
+            for vi in bundle.visual_inputs:
+                if vi.get("b64") and vi.get("mime"):
+                    content_blocks.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{vi['mime']};base64,{vi['b64']}",
+                        },
+                    })
+            return Message(role="user", content=content_blocks)
+
+        return Message(role="user", content=text_content)
 
     # ------------------------------------------------------------------
     # Retry / corrective feedback message

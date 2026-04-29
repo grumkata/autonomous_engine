@@ -523,14 +523,18 @@ async def _run_tool_loop(
             if result.get("files_created"):
                 all_files_created.extend(result["files_created"])
 
-        # Build tool results message to feed back to LLM
+        # Build tool results message — inject visual blocks for vision tools
         results_text = "## Tool Results\n\n"
+        visual_blocks_this_round: list[dict] = []
+
         for i, (tc, result) in enumerate(zip(tool_calls, tool_results)):
             results_text += f"### Tool {i+1}: {tc.get('tool')}\n"
             if result.get("success"):
-                # Summarise result (avoid flooding context)
                 summarised = _summarise_tool_result(result)
                 results_text += f"Status: SUCCESS\n{summarised}\n\n"
+                # Collect visual blocks from vision tools
+                for vblock in result.get("visual_blocks", []):
+                    visual_blocks_this_round.append(vblock)
             else:
                 results_text += f"Status: FAILED\nError: {result.get('error', 'Unknown error')}\n\n"
 
@@ -540,10 +544,18 @@ async def _run_tool_loop(
             "Do NOT include tool_calls in this response unless you need more information."
         )
 
-        # Append tool results to conversation and re-call LLM
-        messages = list(messages)  # copy
+        # Build the message — multimodal if we have visual blocks
+        if visual_blocks_this_round:
+            # Inject images directly into the message for vision-capable models
+            content_blocks: list[dict] = [{"type": "text", "text": results_text}]
+            content_blocks.extend(visual_blocks_this_round)
+            tool_result_message = Message(role="user", content=content_blocks)
+        else:
+            tool_result_message = Message(role="user", content=results_text)
+
+        messages = list(messages)
         messages.append(Message(role="assistant", content=_json.dumps(raw_json)))
-        messages.append(Message(role="user",      content=results_text))
+        messages.append(tool_result_message)
 
         try:
             raw_json, llm_result = await client.chat_json(messages, **chat_kwargs)

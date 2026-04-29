@@ -120,7 +120,7 @@ class OpenAICompatProvider(LLMProvider):
 
         body: dict[str, Any] = {
             "model": model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": [m.to_api_dict() for m in messages],
             "stream": False,
         }
         if temperature is not None:
@@ -157,7 +157,7 @@ class OpenAICompatProvider(LLMProvider):
 
         body: dict[str, Any] = {
             "model": model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "messages": [m.to_api_dict() for m in messages],
             "stream": True,
         }
         if temperature is not None:

@@ -16,11 +16,9 @@ from llm.schemas import (
     UsageStats,
     AgentInputBundle,
     AgentOutput,
-    ModelInfo,
 )
 
 __all__ = [
-    "AsyncOllamaClient",
     "get_client",
     "close_client",
     "PromptBuilder",
@@ -31,5 +29,4 @@ __all__ = [
     "UsageStats",
     "AgentInputBundle",
     "AgentOutput",
-    "ModelInfo",
 ]
