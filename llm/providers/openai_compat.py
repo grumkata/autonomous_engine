@@ -359,7 +359,7 @@ def make_siliconflow_provider(api_key: str, default_model: str = "Qwen/Qwen3-8B"
 
 def make_llm7_provider(api_key: str = "", default_model: str = "deepseek-ai/DeepSeek-R1") -> OpenAICompatProvider:
     """LLM7.io — 30-120 RPM free, 27+ models, no credit card. llm7.io"""
-    return _make("https://api.llm7.io/v1", api_key or "llm7-free", default_model, "llm7")
+    return _make("https://llm7.io/v1", api_key or "llm7-free", default_model, "llm7")
 
 
 def make_kluster_provider(api_key: str, default_model: str = "klusterai/Meta-Llama-3.3-70B-Instruct-Turbo") -> OpenAICompatProvider:
@@ -374,8 +374,7 @@ def make_bazaarlink_provider(api_key: str, default_model: str = "auto:free") -> 
 
 def make_pollinations_provider(api_key: str = "", default_model: str = "openai-large") -> OpenAICompatProvider:
     """Pollinations.ai — no API key, no limits (fair use). gen.pollinations.ai"""
-    # Uses POST /openai (not /v1/chat/completions) but compatible wrapper exists
-    return _make("https://api.pollinations.ai", api_key or "noop", default_model, "pollinations")
+    return _make("https://text.pollinations.ai/openai", api_key or "noop", default_model, "pollinations")
 
 
 def make_ollama_cloud_provider(api_key: str, default_model: str = "deepseek-v3.2") -> OpenAICompatProvider:

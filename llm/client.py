@@ -116,9 +116,9 @@ def _build_provider(settings: Settings) -> LLMProvider:
         if not settings.groq_api_key:
             log.warning(
                 "llm.provider.groq_key_missing",
-                hint="Set GROQ_API_KEY in .env — falling back to Ollama",
+                hint="Set GROQ_API_KEY in .env — falling back to llm7",
             )
-            return _make_ollama_provider(settings)
+            return _make_llm7_provider(settings)
         log.info("llm.provider.selected", provider="groq", model=settings.groq_default_model)
         return make_groq_provider(
             api_key=settings.groq_api_key,
@@ -130,9 +130,9 @@ def _build_provider(settings: Settings) -> LLMProvider:
         if not settings.openrouter_api_key:
             log.warning(
                 "llm.provider.openrouter_key_missing",
-                hint="Set OPENROUTER_API_KEY in .env — falling back to Ollama",
+                hint="Set OPENROUTER_API_KEY in .env — falling back to llm7",
             )
-            return _make_ollama_provider(settings)
+            return _make_llm7_provider(settings)
         log.info(
             "llm.provider.selected",
             provider="openrouter",
@@ -148,9 +148,9 @@ def _build_provider(settings: Settings) -> LLMProvider:
         if not settings.anthropic_api_key:
             log.warning(
                 "llm.provider.anthropic_key_missing",
-                hint="Set ANTHROPIC_API_KEY in .env — falling back to Ollama",
+                hint="Set ANTHROPIC_API_KEY in .env — falling back to llm7",
             )
-            return _make_ollama_provider(settings)
+            return _make_llm7_provider(settings)
         log.info(
             "llm.provider.selected",
             provider="anthropic",
@@ -162,14 +162,24 @@ def _build_provider(settings: Settings) -> LLMProvider:
             timeout_seconds=settings.anthropic_timeout_seconds,
         )
 
-    # Default — Ollama
-    if provider_name != "ollama":
+    if provider_name == "ollama":
+        return _make_ollama_provider(settings)
+
+    # Default — llm7 (keyless, always available)
+    if provider_name != "llm7":
         log.warning(
             "llm.provider.unknown",
             requested=provider_name,
-            fallback="ollama",
+            fallback="llm7",
         )
-    return _make_ollama_provider(settings)
+    return _make_llm7_provider(settings)
+
+
+def _make_llm7_provider(settings: Settings):
+    from llm.providers.openai_compat import make_llm7_provider
+    model = getattr(settings, "llm7_default_model", "deepseek-ai/DeepSeek-R1")
+    log.info("llm.provider.selected", provider="llm7", model=model)
+    return make_llm7_provider(default_model=model)
 
 
 def _make_ollama_provider(settings: Settings):

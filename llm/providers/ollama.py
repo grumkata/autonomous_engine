@@ -18,18 +18,79 @@ from typing import Any
 import httpx
 import structlog
 
+from pydantic import BaseModel, Field
+
 from llm.providers.base import LLMProvider
 from llm.schemas import (
-    AvailableModels,
     ChatRequest,
     ChatResponse,
     LLMResult,
     Message,
-    ModelInfo,
     OllamaOptions,
     StreamChunk,
     UsageStats,
 )
+
+
+# ---------------------------------------------------------------------------
+# Ollama-local types (not shared with other providers)
+# ---------------------------------------------------------------------------
+
+class ModelInfo(BaseModel):
+    name: str
+    model: str = ""
+    modified_at: str = ""
+    size: int = 0
+    digest: str = ""
+    details: dict = Field(default_factory=dict)
+
+
+class AvailableModels(BaseModel):
+    models: list[ModelInfo] = Field(default_factory=list)
+
+    def has_model(self, name: str) -> bool:
+        return any(m.name == name for m in self.models)
+
+
+# ---------------------------------------------------------------------------
+# Ollama response parsers (Ollama wire format differs from OpenAI compat)
+# ---------------------------------------------------------------------------
+
+def _parse_chat_response(data: dict[str, Any]) -> ChatResponse:
+    msg = data.get("message", {})
+    prompt_tokens = data.get("prompt_eval_count", 0)
+    completion_tokens = data.get("eval_count", 0)
+    return ChatResponse(
+        model=data.get("model", ""),
+        message=Message(role=msg.get("role", "assistant"), content=msg.get("content", "")),
+        done=data.get("done", True),
+        done_reason=data.get("done_reason", "stop"),
+        usage=UsageStats(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        ),
+    )
+
+
+def _parse_stream_chunk(data: dict[str, Any]) -> StreamChunk:
+    msg = data.get("message", {})
+    done = data.get("done", False)
+    usage = None
+    if done:
+        prompt_tokens = data.get("prompt_eval_count", 0)
+        completion_tokens = data.get("eval_count", 0)
+        usage = UsageStats(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
+    return StreamChunk(
+        model=data.get("model", ""),
+        message=Message(role=msg.get("role", "assistant"), content=msg.get("content", "")),
+        done=done,
+        usage=usage,
+    )
 
 log = structlog.get_logger(__name__)
 
@@ -114,7 +175,7 @@ class OllamaProvider(LLMProvider):
             "POST", "/api/chat", request.to_ollama_dict(), retry_limit=retry_limit
         )
         latency_ms = int((time.monotonic() - t_start) * 1000)
-        response = ChatResponse.from_ollama_dict(data)
+        response = _parse_chat_response(data)
 
         log.debug(
             "ollama.chat.complete",
@@ -149,7 +210,7 @@ class OllamaProvider(LLMProvider):
                     continue
                 try:
                     data = json.loads(line)
-                    yield StreamChunk.from_ollama_dict(data)
+                    yield _parse_stream_chunk(data)
                 except json.JSONDecodeError:
                     log.warning("ollama.stream.unparseable", line=line[:100])
 

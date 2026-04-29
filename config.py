@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     # "single"  — one provider for everything (LLM_PROVIDER)
     # "tiered"  — route tasks to cheapest capable provider (recommended)
     llm_mode: str = "single"
-    llm_provider: str = "ollama"  # used in single mode
+    llm_provider: str = "llm7"  # used in single mode; llm7 is keyless so works out of the box
 
     # ── Tier pools ────────────────────────────────────────────────────────────
     # Comma-separated. Providers with missing API keys are silently skipped.
